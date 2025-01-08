@@ -1,4 +1,4 @@
-/name: Overview of SCIDs from Threat and Vulnerability Management (TVM) module recommendations in MDE
+//name: Overview of SCIDs from Threat and Vulnerability Management (TVM) module recommendations in MDE
 //description:
 //This query will provide a list of all SCIDs in Defender XDR
 //Line 2 in the query can be adjusted to your needs to get a list for a specific config category (e.g. Antivirus), if that category applies to the devices in your instance and
