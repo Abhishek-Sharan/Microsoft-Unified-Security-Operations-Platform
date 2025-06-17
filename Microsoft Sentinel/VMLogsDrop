@@ -1,0 +1,32 @@
+let timeWindow = 30m;  // Threshold: how long we wait before considering a VM as "not sending logs"
+let recentTime = ago(timeWindow);
+let lookbackPeriod = 30d;  // Lookback window to collect log history for analysis
+// Collect logs from Linux VMs (Syslog)
+let linuxLogs = Syslog
+| where TimeGenerated > ago(lookbackPeriod)
+| project TimeGenerated, Computer;
+// Collect logs from Windows VMs (SecurityEvent)
+let windowsLogs = SecurityEvent
+| where TimeGenerated > ago(lookbackPeriod)
+| project TimeGenerated, Computer;
+// Combine both log types and find the last time logs were received per VM
+let allLogs = union linuxLogs, windowsLogs
+| summarize LastSeen = max(TimeGenerated) by Computer
+| extend LogStopped = iif(LastSeen < recentTime, "Yes", "No")  // Mark as "Yes" if logs haven't come in within the timeWindow
+| where LogStopped == "Yes";  // Only return VMs that stopped sending logs
+// Join with latest metadata from Heartbeat to enrich with OS and Azure context
+allLogs
+| join kind=leftouter (
+    Heartbeat
+    | summarize arg_max(TimeGenerated, OSType, OSName, ComputerEnvironment, ResourceGroup, SubscriptionId) by Computer  // Get the latest metadata for each VM
+) on Computer
+// Final output
+| project 
+    Computer,               // VM name
+    OSType,                 // OS type: Windows or Linux
+    OSName,                 // OS version/name
+    ComputerEnvironment,    // Azure, Non-Azure, or Hybrid
+    ResourceGroup,          // Azure Resource Group 
+    SubscriptionId,         // Azure Subscription ID 
+    LastSeen,               // Timestamp of the last ingested log
+    LogStopped              // Yes = VM is currently not sending logs
