@@ -1,0 +1,31 @@
+// =============================
+// Configuration Section
+// =============================
+let total_days = 30d;                        // Adjust the analysis period here
+let startdate = now() - total_days;         // Start date of the range
+let enddate = now();                        // End date (default: now)
+let total_days_num = todouble(datetime_diff("day", enddate, startdate)); // Numeric representation of duration
+// =============================
+// Data Query Section
+// =============================
+Usage
+| where TimeGenerated between (startdate .. enddate)
+| summarize BillableDataMB = sum(Quantity) by DataType, bin(TimeGenerated, 1d)
+| extend Day = format_datetime(TimeGenerated, "yyyy-MM-dd")   // For better display
+| project Day, DataType, BillableDataMB
+// =============================
+// Optional Summary Output
+// =============================
+// To get a quick overview of total and daily average usage per DataType
+| join kind=inner (
+    Usage
+    | where TimeGenerated between (startdate .. enddate)
+    | summarize TotalMB = sum(Quantity), AvgPerDayMB = sum(Quantity) / total_days_num by DataType
+) on DataType
+| project Day, DataType, BillableDataMB, TotalMB, AvgPerDayMB
+| order by Day asc
+// =============================
+// Visualization
+// =============================
+| render table 
+| order by AvgPerDayMB desc 
