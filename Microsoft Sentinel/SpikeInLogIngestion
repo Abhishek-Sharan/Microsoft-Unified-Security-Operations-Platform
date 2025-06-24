@@ -1,0 +1,4 @@
+Usage
+| summarize MB = sum(Quantity) by DataType, bin(TimeGenerated, 1h)
+| where MB > 500
+| order by MB desc 
