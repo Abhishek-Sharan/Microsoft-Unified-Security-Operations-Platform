@@ -1,0 +1,20 @@
+// =====================================
+// Define the analysis window (last 30 days)
+// =====================================
+let total_days = 30d;                           // Duration to analyze (adjustable)
+let startdate = now() - total_days;             // Start of the time range
+let enddate = now();                            // End of the time range (current time)
+// =====================================
+// Query usage data within the time range
+// =====================================
+Usage
+| where TimeGenerated between (startdate .. enddate)   // Filter logs from last 30 days
+// =====================================
+// Aggregate billable data per day and per DataType
+// =====================================
+| summarize BillableDataMB = sum(Quantity)             // Quantity is in MB (billable ingestion)
+    by Day = bin(TimeGenerated, 1d), DataType          // Group by day and DataType
+// =====================================
+// Sort results by BillableData (descending)
+// =====================================
+| order by BillableDataMB desc 
