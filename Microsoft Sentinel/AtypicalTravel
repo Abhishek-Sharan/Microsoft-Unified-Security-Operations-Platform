@@ -1,0 +1,35 @@
+SigninLogs
+// Filter sign-ins where location data is available
+| where isnotempty(Location)
+// Exclude sign-ins from India (adjust as needed)
+| where tolower(Location) != "india"
+// Select relevant columns for analysis
+| project UserPrincipalName, Location, TimeGenerated, AppDisplayName, ResultType, ResultDescription
+// Sort by user and time ascending to process sequentially
+| order by UserPrincipalName asc, TimeGenerated asc
+// Preserve row order for use of prev() function
+| serialize
+// Get previous login details per user for comparison
+| extend PreviousUser = prev(UserPrincipalName),
+         PreviousLocation = prev(Location),
+         PreviousTime = prev(TimeGenerated),
+         PreviousApp = prev(AppDisplayName),
+         PreviousResultType = prev(ResultType),
+         PreviousResultDescription = prev(ResultDescription)
+// Only keep rows where current and previous login belong to the same user
+| where UserPrincipalName == PreviousUser
+// Calculate time difference in minutes between current and previous login
+| extend TimeDiffMinutes = datetime_diff('minute', TimeGenerated, PreviousTime)
+// Filter cases where location changed within 60 minutes (impossible travel scenario)
+| where Location != PreviousLocation and TimeDiffMinutes < 60
+// Label login attempts as Success or Failure based on ResultType (0 = success)
+| extend PreviousLoginStatus = iff(PreviousResultType == 0, "Success", "Failure"),
+         CurrentLoginStatus = iff(ResultType == 0, "Success", "Failure")
+// Select final output columns with clear labels
+| project UserPrincipalName, 
+          PreviousLocation, Location, 
+          PreviousTime, TimeGenerated, 
+          TimeDiffMinutes, 
+          PreviousApp, CurrentApp = AppDisplayName,
+          PreviousLoginStatus, PreviousResultDescription,
+          CurrentLoginStatus, ResultDescription
