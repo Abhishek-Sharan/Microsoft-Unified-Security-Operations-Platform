@@ -1,0 +1,27 @@
+// Set the time range to the last 7 days
+let TimeRangeStart = ago(7d);
+// Get failed sign-ins grouped by 30-minute windows per user
+let FailedLogins = SigninLogs
+| where TimeGenerated >= TimeRangeStart and ResultType != 0
+| summarize 
+    FailedAttemptCount = count(), 
+    FirstFailedTime = min(TimeGenerated), 
+    LastFailedTime = max(TimeGenerated)
+    by UserPrincipalName, FailureWindow = bin(TimeGenerated, 30m)
+| where FailedAttemptCount >= 3;  // Threshold for "multiple" failures
+// Get successful sign-ins within the same time range
+let SuccessfulLogins = SigninLogs
+| where TimeGenerated >= TimeRangeStart and ResultType == 0
+| project UserPrincipalName, SuccessfulLoginTime = TimeGenerated;
+// Join failed attempts with corresponding successful logins
+FailedLogins
+| join kind=inner (SuccessfulLogins) on UserPrincipalName
+| where SuccessfulLoginTime between (FailureWindow .. FailureWindow + 30m)
+| project 
+    UserPrincipalName,
+    FailedAttemptCount,
+    FirstFailedTime,
+    LastFailedTime,
+    SuccessfulLoginTime,
+    FailureWindow
+| order by SuccessfulLoginTime desc
