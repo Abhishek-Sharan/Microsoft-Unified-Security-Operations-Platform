@@ -1,0 +1,14 @@
+SigninLogs
+| where TimeGenerated >= ago(90d)
+| where isnotempty(UserPrincipalName)
+| sort by UserPrincipalName asc, TimeGenerated asc
+| serialize
+| extend PrevSignIn = prev(TimeGenerated)
+| extend PrevUser = prev(UserPrincipalName)
+| where (PrevUser == UserPrincipalName and datetime_diff('day', TimeGenerated, PrevSignIn) >= 30) or isnull(PrevSignIn)
+| project
+    UserPrincipalName,
+    LastLoginDate = PrevSignIn,
+    CurrentLoginDate = TimeGenerated,
+    GapDays = iff(isnull(PrevSignIn), long(null), datetime_diff('day', TimeGenerated, PrevSignIn))
+| order by CurrentLoginDate desc
