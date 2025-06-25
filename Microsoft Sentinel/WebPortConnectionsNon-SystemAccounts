@@ -1,0 +1,6 @@
+DeviceNetworkEvents
+| where RemotePort in (80, 443)
+| where InitiatingProcessAccountName !in~ ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE") // Filter out system noise
+//| summarize count() by InitiatingProcessAccountName
+| summarize count() by DeviceName, RemoteIP, RemoteUrl, InitiatingProcessFileName, bin(TimeGenerated, 1h)
+| where count_ > 100 // Threshold to be tuned
