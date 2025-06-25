@@ -1,0 +1,26 @@
+// Define the list of severity levels to track
+let SeverityLevels = dynamic(["warning", "notice", "error", "critical"]);
+// Get all Linux VMs that have sent a heartbeat in the last 2 hours, with their latest details
+let OnVMs = Heartbeat
+| where TimeGenerated >= ago(2h)
+| where OSType == "Linux"
+| summarize arg_max(TimeGenerated, *) by Computer
+| extend IPAddress = tostring(ComputerPrivateIPs[0]);
+// Get all Linux VMs that have sent syslog entries with the tracked severities in the last 2 hours
+let VMSeverities = Syslog
+| where TimeGenerated >= ago(2h)
+| where SeverityLevel in ("warning", "notice", "error", "critical")
+| summarize PresentSeverities = make_set(SeverityLevel) by Computer;
+// Join the two lists, keeping all VMs that are ON, and check which severity logs are missing
+OnVMs
+| join kind=leftouter (VMSeverities) on Computer
+| extend MissingSeverities = set_difference(SeverityLevels, iff(isnull(PresentSeverities), dynamic([]), PresentSeverities))
+// Only show VMs missing at least one of the tracked severity logs
+| where array_length(MissingSeverities) > 0
+// Add a column with a message about which logs are missing
+| extend MissingLogSeverity = case(
+    array_length(MissingSeverities) == 4, "All severity logs missing",
+    strcat("Missing: ", strcat_array(MissingSeverities, ", "))
+)
+// Project the relevant columns for SOC monitoring
+| project Computer, SubscriptionId, ResourceGroup, ComputerEnvironment, OSType, IPAddress, MissingLogSeverity
