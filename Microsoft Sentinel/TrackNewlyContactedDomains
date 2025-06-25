@@ -1,0 +1,17 @@
+let knownDomains = DeviceNetworkEvents
+| where TimeGenerated < ago(7d)
+| where isnotempty(RemoteUrl)
+| distinct RemoteUrl;
+DeviceNetworkEvents
+| where TimeGenerated > ago(1d)
+| where isnotempty(RemoteUrl)
+| where RemoteUrl !in (knownDomains)
+| summarize 
+    connectionCount = count(), 
+    Devices = makeset(DeviceName), 
+    Processes = makeset(InitiatingProcessFileName), 
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by RemoteUrl
+| where connectionCount > 5  // Adjust threshold as needed
+| order by connectionCount desc
