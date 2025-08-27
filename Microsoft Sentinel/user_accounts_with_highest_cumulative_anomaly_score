@@ -1,0 +1,14 @@
+let lookback = 30d;
+Anomalies
+| where TimeGenerated >= ago(lookback)
+| project TimeGenerated, Score, Entities                 
+| mv-expand Entity = Entities
+| where tostring(Entity.Type) =~ "account"
+| extend user_name   = tostring(Entity["Name"]),
+         upn_suffix  = tostring(Entity["UPNSuffix"])
+| extend UserPrincipalName = iif(isnotempty(upn_suffix), strcat(user_name, "@", upn_suffix), user_name)
+| where isnotempty(UserPrincipalName)
+| extend UserPrincipalName = tolower(trim(@" \t\r\n", UserPrincipalName))
+| summarize TotalScore = sum(Score) by UserPrincipalName
+| order by TotalScore desc
+| take 10
