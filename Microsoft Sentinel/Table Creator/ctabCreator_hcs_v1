@@ -1,0 +1,100 @@
+param(
+    [Parameter(Mandatory = $false)]
+    [string]$resourceID = "/subscriptions/080eb798-68a7-4bfb-bc80-935092b1c7e7/resourcegroups/azmon-dcr-dce-rg/providers/microsoft.operationalinsights/workspaces/law-eastus",
+
+    [Parameter(Mandatory = $false)]
+    [string]$tableName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$plan,  # Removed ValidateSet here — we'll validate manually after mapping
+
+    [Parameter(Mandatory = $false)]
+    [int]$totalRetentionInDays
+)
+
+# Prompt for table name if not provided
+if (-not $tableName) {
+    $tableName = Read-Host "Enter table name (e.g. MyTable_CL)"
+}
+
+# Prompt for plan if not provided
+if (-not $plan) {
+    Write-Host "Available plans:"
+    Write-Host " - Analytics"
+    Write-Host " - Basic"
+    Write-Host " - Auxiliary/Data Lake"
+    $plan = Read-Host "Enter plan"
+}
+
+# Normalize input
+switch ($plan.ToLower()) {
+    "analytics"         { $plan = "Analytics" }
+    "basic"             { $plan = "Basic" }
+    "auxiliary"         { $plan = "Auxiliary" }
+    "aux"               { $plan = "Auxiliary" }
+    "data lake"         { $plan = "Auxiliary" }
+    "datalake"          { $plan = "Auxiliary" }
+    "auxiliary/data lake" { $plan = "Auxiliary" }
+    default {
+        Write-Host "❌ Invalid plan. Must be one of: Analytics, Basic, Auxiliary/Data Lake" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Prompt for retention if not provided
+if (-not $totalRetentionInDays) {
+    $totalRetentionInDays = Read-Host "Enter total retention in days (e.g. 365)"
+}
+
+# Display summary
+Write-Host "`n========================"
+Write-Host "🛠️  Creating Table..."
+Write-Host "------------------------"
+Write-Host "Table Name        : $tableName"
+Write-Host "Plan              : $(if ($plan -eq 'Auxiliary') {'Auxiliary/Data Lake'} else {$plan})"
+Write-Host "Retention (days)  : $totalRetentionInDays"
+Write-Host "Workspace         : $resourceID"
+Write-Host "========================`n"
+
+# Table payload
+$tableParams = @"
+{
+    "properties": {
+        "plan": "$plan",
+        "totalRetentionInDays": $totalRetentionInDays,
+        "schema": {
+            "name": "$tableName",
+            "columns": [
+                { "name": "TimeGenerated", "type": "datetime" },
+                { "name": "Action", "type": "string" },
+                { "name": "UserId", "type": "guid" },
+                { "name": "Status", "type": "int" },
+                { "name": "EventTime", "type": "datetime" },
+                { "name": "IsActive", "type": "boolean" }
+            ]
+        }
+    }
+}
+"@
+
+# Create or update the table
+$response = Invoke-AzRestMethod -Path "$resourceID/tables/$($tableName)?api-version=2023-01-01-preview" -Method PUT -Payload $tableParams
+
+# Output result
+if ($response.StatusCode -eq 200 -or $response.StatusCode -eq 202) {
+    Write-Host "✅ Table '$tableName' created or updated successfully." -ForegroundColor Green
+    Write-Host "Status Code: $($response.StatusCode)"
+} else {
+    Write-Host "❌ Failed to create/update table '$tableName'." -ForegroundColor Red
+    Write-Host "Status Code: $($response.StatusCode)"
+    
+    if ($response.Content) {
+        $errorDetails = $response.Content | ConvertFrom-Json
+        if ($errorDetails.error) {
+            Write-Host "Error Code   : $($errorDetails.error.code)" -ForegroundColor Red
+            Write-Host "Error Message: $($errorDetails.error.message)" -ForegroundColor Red
+        } else {
+            Write-Host "Error details not available." -ForegroundColor Red
+        }
+    }
+}
