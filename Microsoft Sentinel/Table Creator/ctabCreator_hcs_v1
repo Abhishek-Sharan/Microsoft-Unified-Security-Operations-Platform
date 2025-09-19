@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$resourceID = "/subscriptions/080eb798-68a7-4bfb-bc80-935092b1c7e7/resourcegroups/azmon-dcr-dce-rg/providers/microsoft.operationalinsights/workspaces/law-eastus",
+    [string]$resourceID = "/subscriptions/000000000000000000/resourcegroups/your RG/providers/microsoft.operationalinsights/workspaces/workspace name",
 
     [Parameter(Mandatory = $false)]
     [string]$tableName,
