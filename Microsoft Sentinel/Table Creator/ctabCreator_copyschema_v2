@@ -1,0 +1,207 @@
+param(
+    [Parameter(Mandatory = $false)]
+    [string]$resourceID = "/subscriptions/080eb798-68a7-4bfb-bc80-935092b1c7e7/resourcegroups/azmon-dcr-dce-rg/providers/microsoft.operationalinsights/workspaces/law-eastus",
+
+    [Parameter(Mandatory = $false)]
+    [string]$sourceTableName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$newTableName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$plan,
+
+    [Parameter(Mandatory = $false)]
+    [int]$totalRetentionInDays,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$ConvertToString
+)
+
+# Prompt for any missing values
+if (-not $sourceTableName) {
+    $sourceTableName = Read-Host "Enter the existing table name to copy schema from (e.g. SecurityEvent)"
+}
+
+if (-not $newTableName) {
+    $newTableName = Read-Host "Enter the new table name to create (e.g. CustomTable_CL)"
+}
+
+if (-not $plan) {
+    Write-Host "Available plans: Analytics, Basic, Auxiliary/Data Lake"
+    $plan = Read-Host "Enter plan"
+}
+
+# Normalize user plan input
+switch ($plan.ToLower()) {
+    "analytics"             { $plan = "Analytics" }
+    "basic"                 { $plan = "Basic" }
+    "auxiliary"             { $plan = "Auxiliary" }
+    "aux"                   { $plan = "Auxiliary" }
+    "data lake"             { $plan = "Auxiliary" }
+    "datalake"              { $plan = "Auxiliary" }
+    "auxiliary/data lake"   { $plan = "Auxiliary" }
+    default {
+        Write-Host "❌ Invalid plan. Must be one of: Analytics, Basic, Auxiliary/Data Lake" -ForegroundColor Red
+        exit 1
+    }
+}
+
+if (-not $totalRetentionInDays) {
+    $totalRetentionInDays = Read-Host "Enter total retention in days (e.g. 365)"
+}
+
+# Step 1: Query existing table schema using getschema
+Write-Host "`n🔍 Querying schema for '$sourceTableName'..."
+
+$schemaQuery = "$sourceTableName | getschema | project ColumnName, ColumnType"
+
+$body = @{
+    query = $schemaQuery
+} | ConvertTo-Json -Depth 2
+
+# Use legacy API to query schema
+$queryResponse = Invoke-AzRestMethod -Path "$resourceID/query?api-version=2017-10-01" -Method POST -Payload $body
+
+if ($queryResponse.StatusCode -ne 200) {
+    Write-Host "❌ Failed to fetch schema for '$sourceTableName'. Status code: $($queryResponse.StatusCode)" -ForegroundColor Red
+    exit 1
+}
+
+$data = $queryResponse.Content | ConvertFrom-Json
+$columnsData = $data.tables[0]
+$columns = @()
+$stringList = @()
+
+# List of reserved column names that cannot be used in custom tables
+# Note: TimeGenerated is required for custom tables, so we don't filter it out
+$reservedColumns = @(
+    "Type", "Computer", "TenantId", "SourceSystem", 
+    "_ResourceId", "_SubscriptionId", "_BilledSize", "_IsBillable"
+)
+
+foreach ($row in $columnsData.rows) {
+    $columnName = $row[0]
+    $columnType = $row[1]
+    
+    # Skip reserved columns (but keep TimeGenerated as it's mandatory)
+    if ($columnName -notin $reservedColumns) {
+        
+        # Handle Auxiliary plan compatibility for bool type
+        if ($plan -eq "Auxiliary" -and $columnType -eq "bool") {
+            $columnType = "boolean"
+        }
+        
+        # Handle dynamic columns for Auxiliary plan
+        if ($plan -eq "Auxiliary" -and $columnType -eq "dynamic") {
+            if ($ConvertToString) {
+                # Add original column name to string list for KQL generation
+                $stringList += $columnName
+                
+                # Modify column name and type
+                $columnName = $columnName + "_str"
+                $columnType = "string"
+                
+                Write-Host "🔄 Converting dynamic column '$($row[0])' to '$columnName' (string type)" -ForegroundColor Cyan
+            } else {
+                # Skip dynamic columns if not converting to string
+                Write-Host "⚠️ Skipping dynamic column '$columnName' - not supported in Auxiliary plan (use -ConvertToString to convert)" -ForegroundColor Yellow
+                continue
+            }
+        }
+        
+        $columns += @{
+            name = $columnName
+            type = $columnType
+        }
+    } else {
+        Write-Host "⚠️ Skipping reserved column: $columnName" -ForegroundColor Yellow
+    }
+}
+
+# Ensure TimeGenerated column exists (required for custom tables)
+$hasTimeGenerated = $columns | Where-Object { $_.name -eq "TimeGenerated" }
+if (-not $hasTimeGenerated) {
+    Write-Host "📅 Adding mandatory TimeGenerated column" -ForegroundColor Cyan
+    $columns = @(@{
+        name = "TimeGenerated"
+        type = "datetime"
+    }) + $columns
+}
+
+# Check if we have any columns left after filtering
+if ($columns.Count -eq 0) {
+    Write-Host "❌ No valid columns found after filtering reserved columns. Cannot create table." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "✅ Found $($columns.Count) valid columns for the new table." -ForegroundColor Green
+
+# Step 2: Build the table creation payload
+$tableParams = @{
+    properties = @{
+        plan = $plan
+        totalRetentionInDays = $totalRetentionInDays
+        schema = @{
+            name = $newTableName
+            columns = $columns
+        }
+    }
+}
+
+$jsonPayload = $tableParams | ConvertTo-Json -Depth 10
+
+# Step 3: Create the new table using latest API
+$apiVersion = "2023-01-01-preview"
+
+Write-Host "`n========================"
+Write-Host "🛠️  Creating Table..."
+Write-Host "------------------------"
+Write-Host "Source Table      : $sourceTableName"
+Write-Host "New Table         : $newTableName"
+Write-Host "Plan              : $(if ($plan -eq 'Auxiliary') {'Auxiliary/Data Lake'} else {$plan})"
+Write-Host "Retention (days)  : $totalRetentionInDays"
+Write-Host "Workspace         : $resourceID"
+Write-Host "API Version       : $apiVersion"
+Write-Host "========================`n"
+
+# Construct the path with proper API version parameter
+$createPath = "$resourceID/tables/$newTableName" + "?api-version=$apiVersion"
+Write-Host "🔗 API Path: $createPath" -ForegroundColor Cyan
+
+$response = Invoke-AzRestMethod -Path $createPath -Method PUT -Payload $jsonPayload
+
+# Step 4: Output results
+if ($response.StatusCode -eq 200 -or $response.StatusCode -eq 202) {
+    Write-Host "✅ Table '$newTableName' created or updated successfully." -ForegroundColor Green
+    Write-Host "Status Code: $($response.StatusCode)"
+    
+    # Generate transformation KQL if dynamic columns were converted to string
+    if ($stringList.Count -gt 0) {
+        $extendParts = ""
+        foreach ($col in $stringList) {
+            $newCol = $col + "_str"
+            $extendParts += "$newCol = tostring($col), "
+        }
+        $transformKql = "source | extend $extendParts"
+        $transformKql = $transformKql.Substring(0, $transformKql.Length - 2)
+        
+        Write-Host ""
+        Write-Host "📋 NOTICE: Dynamic columns were converted to String. Include this transformation in your DCR:" -ForegroundColor Yellow
+        Write-Host "`"transformKql`": `"$transformKql`"" -ForegroundColor Cyan
+        Write-Host ""
+    }
+} else {
+    Write-Host "❌ Failed to create/update table '$newTableName'." -ForegroundColor Red
+    Write-Host "Status Code: $($response.StatusCode)"
+
+    if ($response.Content) {
+        $errorDetails = $response.Content | ConvertFrom-Json
+        if ($errorDetails.error) {
+            Write-Host "Error Code   : $($errorDetails.error.code)" -ForegroundColor Red
+            Write-Host "Error Message: $($errorDetails.error.message)" -ForegroundColor Red
+        } else {
+            Write-Host "No detailed error information returned." -ForegroundColor Yellow
+        }
+    }
+}
